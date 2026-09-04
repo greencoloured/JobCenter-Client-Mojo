@@ -720,6 +720,50 @@ sub announce {
 	return $err;
 }
 
+sub withdraw {
+	my ($self, %args) = @_;
+	my $actionname = $args{actionname} or croak 'no actionname?';
+	my $log = $self->log;
+
+	croak 'no action announced ' . $actionname unless
+		my $announce = $self->actions->{$actionname};
+
+	delete $self->actions->{$actionname} if $args{force}; # immediately stop accepting task_ready
+
+	my ($done, $err);
+	JobCenter::Client::Mojo::Steps->new(ioloop => $self->ioloop)->steps([
+	sub {
+		my $steps = shift;
+		$self->conn->call('withdraw', {
+			workername => $announce->{workername},
+			actionname => $actionname,
+		}, $steps->next());
+	},
+	sub {
+		my ($steps, $e, $r) = @_;
+		$done++;
+		if ($e) {
+			$err = $e->{message};
+			$log->error("withdraw got error: $err");
+			return;
+		}
+		unless ($r) {
+			$err = 'withdraw failed';
+			$log->error($err);
+			return;
+		}
+		delete $self->actions->{$actionname};
+		$log->debug("succesfully withdrew $actionname");
+	}], sub {
+		($err) = @_;
+		$done++;
+		$log->error("something went wrong with withdraw: $err");
+	});
+
+	$self->_loop(sub { !$done });
+	return $err;
+}
+
 sub rpc_ping {
 	my ($self, $c, $i, $rpccb) = @_;
 	$self->lastping(time());
